@@ -22,7 +22,7 @@ import numpy
 
 # PySceneDetect Library Imports
 from scenedetect.scene_detector import SceneDetector
-
+from .average import KalmanFilter, ExpFilter
 
 class HistogramDetector(SceneDetector):
     """Compares the difference in the Y channel of YUV histograms for adjacent frames. When the
@@ -50,6 +50,7 @@ class HistogramDetector(SceneDetector):
         self._last_hist = None
         self._last_scene_cut = None
         self._metric_key = f"hist_diff [bins={self._bins}]"
+        self._filter = None
 
     def process_frame(self, frame_num: int, frame_img: numpy.ndarray) -> List[int]:
         """Computes the histogram of the luma channel of the frame image and compares it with the
@@ -81,7 +82,8 @@ class HistogramDetector(SceneDetector):
             self._last_scene_cut = frame_num
 
         hist = self.calculate_histogram(frame_img, bins=self._bins)
-
+        if hist.sum() < 1e-4:
+            return cut_list
         # We can only start detecting once we have a frame to compare with.
         if self._last_hist is not None:
             # TODO: We can have EMA of histograms to make it more robust
@@ -97,7 +99,7 @@ class HistogramDetector(SceneDetector):
             # Values close to 1 indicate very similar frames, while lower values suggest changes.
             # Example: If `_threshold` is set to 0.8, it implies that only changes resulting in a correlation
             # less than 0.8 between histograms will be considered significant enough to denote a scene change.
-            if hist_diff <= self._threshold and (
+            if hist_diff <= 0.85 and (
                 (frame_num - self._last_scene_cut) >= self._min_scene_len
             ):
                 cut_list.append(frame_num)
@@ -107,8 +109,9 @@ class HistogramDetector(SceneDetector):
             if self.stats_manager is not None:
                 self.stats_manager.set_metrics(frame_num, {self._metric_key: hist_diff})
 
-        self._last_hist = hist
-
+        if self._filter is None:
+            self._filter = ExpFilter(0.5)
+        self._last_hist = self._filter.update(hist)
         return cut_list
 
     @staticmethod
